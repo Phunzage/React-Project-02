@@ -13,14 +13,15 @@ import (
 
 // TrendingMovie 对应数据库中的表结构
 type TrendingMovie struct {
-	ID         uint   `gorm:"primaryKey" json:"id"`
+	ID         uint   `gorm:"primaryKey" json:"id"`          // 主键，每条记录的唯一标识
 	SearchTerm string `gorm:"uniqueIndex" json:"searchTerm"` // 关键词设为唯一索引
-	Count      int    `json:"count"`
+	Count      int    `json:"count"`                         // 搜索次数
 	MovieID    int    `json:"movie_id"`
 	PosterURL  string `json:"poster_url"`
 }
 
-// UpdateRequest 前端发送的请求数据结构
+// UpdateRequest 前端发送的请求数据结构，规定前端传来的数据必须长什么样
+// 前端发来的数据需要包括：搜索的电影名、电影id，海报路径
 type UpdateRequest struct {
 	SearchTerm string `json:"searchTerm"`
 	MovieID    int    `json:"movie_id"`
@@ -35,9 +36,10 @@ func main() {
 		log.Fatal("无法连接到数据库:", err)
 	}
 
-	// 自动迁移模式，自动在 PostgreSQL 中建表
+	// 自动迁移模式，自动在 PostgreSQL 中建一个同名表
 	db.AutoMigrate(&TrendingMovie{})
 
+	// gin初始化
 	r := gin.Default()
 
 	// 配置跨域(CORS)，允许 React 前端访问
@@ -54,15 +56,19 @@ func main() {
 	{
 		// GET /api/trending：获取前 5 个最热门的搜索记录
 		api.GET("/trending", func(c *gin.Context) {
+			// 创建一个存放电影的数组
 			var movies []TrendingMovie
-			// 对应 Appwrite 的 OrderDesc("count") 和 Limit(5)
+			// 按 count 降序排列，限制取5条，把结果放进movies数组中
 			db.Order("count desc").Limit(5).Find(&movies)
+			// 把装满电影数据的数组发送给前端
 			c.JSON(http.StatusOK, movies)
 		})
 
 		// POST /api/trending：更新或创建搜索统计
 		api.POST("/trending", func(c *gin.Context) {
+			// 接收前端发来的搜索电影信息
 			var req UpdateRequest
+			// 看发来的信息结构是否正确（按照UpdateRequset的结构做拆解，拆解失败就报错）
 			if err := c.ShouldBindJSON(&req); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求数据"})
 				return
@@ -72,17 +78,19 @@ func main() {
 			// 查找是否已经有该 searchTerm
 			result := db.Where("search_term = ?", req.SearchTerm).First(&movie)
 
+			// 如果没找到，就说明是第一次查询这个电影
+			// 新建一条电影数据，次数设为1
 			if result.Error != nil && result.Error == gorm.ErrRecordNotFound {
-				// 对应 Appwrite 的 createDocument
 				movie = TrendingMovie{
 					SearchTerm: req.SearchTerm,
 					Count:      1,
 					MovieID:    req.MovieID,
 					PosterURL:  req.PosterURL,
 				}
+				// 存入到数据库中
 				db.Create(&movie)
 			} else {
-				// 对应 Appwrite 的 updateDocument
+				// 否则（数据库中找到这条电影信息），搜索次数+1
 				movie.Count += 1
 				// 可选：如果同一搜索词对应了新的热门电影，也可以更新海报
 				movie.MovieID = req.MovieID
@@ -90,6 +98,7 @@ func main() {
 				db.Save(&movie)
 			}
 
+			// 发送给前端告知成功
 			c.JSON(http.StatusOK, gin.H{"status": "success", "data": movie})
 		})
 	}
